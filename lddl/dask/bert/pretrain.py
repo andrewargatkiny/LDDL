@@ -374,11 +374,12 @@ def _get_pairs(
     short_seq_prob=0.1,
     blocksize=None,
     num_blocks=None,
-    duplicate_factor=5,
-    sample_ratio=0.9,
+    duplicate_factor=10,
+    sample_ratio=1,
     seed=12345,
     tokenizer=None,
     masking=False,
+    preshuffle_partitions=False,
     masked_lm_ratio=0.15,
 ):
   vocab_words = tuple(tokenizer.vocab.keys())
@@ -436,7 +437,8 @@ def _get_pairs(
             sample_seed=seed,
         ))
   bag_texts = db.concat(bags)
-  bag_texts = _shuffle_bag_texts(bag_texts)
+  if preshuffle_partitions:
+    bag_texts = _shuffle_bag_texts(bag_texts)
   bag_documents = _get_documents(bag_texts, tokenizer)
   return bag_documents.map_partitions(_to_partition_pairs)
 
@@ -601,6 +603,7 @@ def main(args):
       seed=args.seed,
       tokenizer=tokenizer,
       masking=args.masking,
+      preshuffle_partitions=args.preshuffle_partitions,
       masked_lm_ratio=args.masked_lm_ratio,
   )
   args.sink = expand_outdir_and_mkdir(args.sink)
@@ -868,6 +871,15 @@ runtime with convergence impact.
       'time it is returned by the data loader during a training iteration. In '
       'order to enable static masking, this flag needs to be set. This flag is'
       ' not set by default.',
+  )
+  attach_bool_arg(
+      parser,
+      'preshuffle_partitions',
+      default=False,
+      help_str='Whether to preshuffle documents before creating instances. Since'
+               ' instances are created partition-wise, assignment of random second'
+               ' parts is influenced by this setting. If set to true, parts from '
+               'different sources (wiki, books) could form a pair.'
   )
   parser.add_argument(
       '--masked-lm-ratio',
