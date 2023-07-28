@@ -26,6 +26,7 @@ import dask.bag as db
 import nltk
 import os
 import random
+import re
 
 
 def _filter_empty_strs(bag_strs):
@@ -59,6 +60,7 @@ def estimate_block_size(paths, num_blocks):
 
 def _read_bag_of_text(
     path,
+    dataset_id,
     blocksize=None,
     sample_ratio=1.0,
     sample_seed=12345,
@@ -68,6 +70,7 @@ def _read_bag_of_text(
   bag_strs = _filter_empty_strs(bag_strs)
   if sample_ratio < 1.0:
     bag_strs = bag_strs.random_sample(sample_ratio, random_state=sample_seed)
+  bag_strs = bag_strs.map(lambda text: " ".join([dataset_id, text]))
   return bag_strs
 
 
@@ -80,6 +83,7 @@ def read_wikipedia(
 ):
   return _read_bag_of_text(
       os.path.join(path, lang),
+      dataset_id='wiki',
       blocksize=blocksize,
       sample_ratio=sample_ratio,
       sample_seed=sample_seed,
@@ -94,6 +98,7 @@ def read_books(
 ):
   return _read_bag_of_text(
       path,
+      dataset_id='bookcorpus',
       blocksize=blocksize,
       sample_ratio=sample_ratio,
       sample_seed=sample_seed,
@@ -108,6 +113,7 @@ def read_common_crawl(
 ):
   return _read_bag_of_text(
       path,
+      dataset_id='cc',
       blocksize=blocksize,
       sample_ratio=sample_ratio,
       sample_seed=sample_seed,
@@ -122,15 +128,14 @@ def read_open_webtext(
 ):
   return _read_bag_of_text(
       path,
+      dataset_id='open_webtext',
       blocksize=blocksize,
       sample_ratio=sample_ratio,
       sample_seed=sample_seed,
   )
 
 
-def split_id_text(raw_text):
-  # The first token is the document id.
-  i = 0
-  while i < len(raw_text) and not raw_text[i].isspace():
-    i += 1
-  return raw_text[:i], raw_text[i + 1:]
+def split_id_text(raw_text: str):
+    # The first token is the dataset_id, second is the document id.
+    splits = 2
+    return re.split(r"\s+", raw_text.lstrip(), maxsplit=splits)

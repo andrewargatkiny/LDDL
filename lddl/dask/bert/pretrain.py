@@ -23,11 +23,16 @@
 #
 
 import argparse
+import sys
+from typing import Dict, Optional, Iterable
+
 import dask
 import dask.bag as db
 import dask.distributed
 import functools
 import json
+
+import h5py as h5py
 import nltk
 import numpy as np
 import os
@@ -36,7 +41,8 @@ import random
 import time
 import transformers
 from collections import deque, namedtuple
-
+print(__package__)
+print(sys.path)
 from ..readers import (read_wikipedia, read_books, read_common_crawl,
                        split_id_text, estimate_block_size)
 from lddl.utils import (expand_outdir_and_mkdir, attach_bool_arg,
@@ -60,9 +66,10 @@ class Sentence:
 
 class Document:
 
-  def __init__(self, doc_id, sentences):
+  def __init__(self, doc_id, sentences, dataset_id=None):
     self._id = doc_id
     self._sentences = sentences
+    self.dataset_id = dataset_id
 
   def __repr__(self):
     return 'Document(_id={}, _sentences={})'.format(self._id, self._sentences)
@@ -80,7 +87,7 @@ def _get_documents(bag_texts, tokenizer, max_length=512):
     return tokenizer.tokenize(s, max_length=max_length, truncation=True)
 
   def _to_document(raw_text):
-    doc_id, text = split_id_text(raw_text)
+    dataset_id, doc_id, text = split_id_text(raw_text)
     sentence_strs = filter(
         None,
         map(lambda s: s.strip(), nltk.tokenize.sent_tokenize(text)),
@@ -91,7 +98,7 @@ def _get_documents(bag_texts, tokenizer, max_length=512):
                      _tokenize(sentence_str) for sentence_str in sentence_strs)
                  if len(tokens) > 0)
 
-    document = Document(doc_id, tuple(sentences))
+    document = Document(doc_id, tuple(sentences), dataset_id)
     return document
 
   return bag_texts.map(_to_document).filter(lambda d: len(d._sentences) > 0)
@@ -239,16 +246,25 @@ def create_masked_lm_predictions(tokens_a, tokens_b, masked_lm_ratio,
 
 
 def create_pairs_from_document(
-    all_documents,
+    all_documents: Iterable[Document],
     document_index,
     max_seq_length=128,
     short_seq_prob=0.1,
     masking=False,
     masked_lm_ratio=0.15,
     vocab_words=None,
+    same_dataset_pairs=False
 ):
   """Create a pair for a single document."""
   document = all_documents[document_index]
+
+  same_ds_indices = []
+  if same_dataset_pairs:
+      # Gather indices of all other documents from the same dataset.
+      dataset_id = document.dataset_id
+      for idx, doc in enumerate(all_documents):
+          if doc.dataset_id == dataset_id and idx != document_index:
+              same_ds_indices.append(idx)
 
   # Account for [CLS], [SEP], [SEP]
   max_num_tokens = max_seq_length - 3
@@ -304,6 +320,8 @@ def create_pairs_from_document(
             random_document_index = random.randint(0, len(all_documents) - 1)
             if random_document_index != document_index:
               break
+          if same_dataset_pairs and len(same_ds_indices) > 0:
+            random_document_index = random.choice(same_ds_indices)
 
           #If picked random document is the same as the current document
           if random_document_index == document_index:
@@ -365,6 +383,46 @@ def create_pairs_from_document(
   return instances
 
 
+def _create_final_instance(
+        instance: Dict,
+        tokenizer,
+        max_seq_length: Optional[int],
+        max_predictions_per_seq: int
+) -> Dict:
+    all_tokens = '[CLS]' + instance['A'] + '[SEP]' + instance['B'] + '[SEP]'
+    filled_length = len(all_tokens)
+    input_ids = tokenizer.convert_tokens_to_ids(all_tokens)
+    input_mask = [1] * len(all_tokens)
+    # Account for [CLS] and [SEP] tokens in 1st segment, [SEP] token in the 2nd.
+    segment_ids = [0] * len(instance['A'] + 2) + [1] * len(instance['B'] + 1)
+    next_sentence_label = 1 if instance['is_random_next'] else 0
+
+    if max_seq_length is not None and filled_length < max_seq_length:
+        to_append = max_seq_length - filled_length
+        input_ids += [0] * to_append
+        input_mask += [0] * to_append
+        segment_ids += [0] * to_append
+
+    masked_lm_positions = list(instance['masked_lm_positions'])
+    masked_lm_ids = tokenizer.convert_tokens_to_ids(instance['masked_lm_labels'].split())
+    masked_len = len(masked_lm_positions)
+    if masked_len < max_predictions_per_seq:
+        to_append_lm = max_predictions_per_seq - masked_len
+        masked_lm_positions += [0] * to_append_lm
+        masked_lm_ids += [0] * to_append_lm
+
+    final_instance = {
+        'input_ids': input_ids,
+        'input_mask': input_mask,
+        'segment_ids': segment_ids,
+        'masked_lm_positions': masked_lm_positions,
+        'masked_lm_ids': masked_lm_ids,
+        'next_sentence_labels': next_sentence_label,
+        'filled_lengths': filled_length
+    }
+    return final_instance
+
+
 def _get_pairs(
     wikipedia_path=None,
     books_path=None,
@@ -375,6 +433,7 @@ def _get_pairs(
     blocksize=None,
     num_blocks=None,
     duplicate_factor=10,
+    same_dataset_pairs=False,
     sample_ratio=1,
     seed=12345,
     tokenizer=None,
@@ -398,6 +457,7 @@ def _get_pairs(
                 masking=masking,
                 masked_lm_ratio=masked_lm_ratio,
                 vocab_words=vocab_words,
+                same_dataset_pairs=same_dataset_pairs
             ))
     random.shuffle(partition_pairs)
     return partition_pairs
@@ -500,6 +560,66 @@ def _save_parquet(
     )
 
 
+def _save_hdf5(
+    pairs: db.Bag,
+    path: str,
+    tokenizer,
+    bin_size=None,
+    target_seq_length=128,
+    max_predictions_per_seq=76,
+    masking=False,
+
+):
+    def _save_one_partition(
+            items,
+            partition_info=None
+    ) -> None:
+        """Saves one partition as a HDF5 file."""
+
+        n_items = len(items)
+        input_ids = np.zeros([n_items, target_seq_length], dtype="int32")
+        input_mask = np.zeros([n_items, target_seq_length], dtype="int8")
+        segment_ids = np.zeros([n_items, target_seq_length], dtype="int8")
+        next_sentence_labels = np.zeros(n_items, dtype="int8")
+        filled_lengths = np.zeros(n_items, dtype="int32")
+        if masking:
+            masked_lm_positions = np.zeros([n_items, target_seq_length], dtype="int32")
+            masked_lm_ids = np.zeros([n_items, target_seq_length], dtype="int32")
+
+        for i, item in enumerate(items):
+            input_ids[i] = item['input_ids']
+            input_mask[i] = item['input_mask']
+            segment_ids[i] = item['segment_ids']
+            next_sentence_labels[i] = item['next_sentence_labels']
+            filled_lengths[i] = item['filled_lengths']
+            if masking:
+                masked_lm_positions[i] = item['masked_lm_positions']
+                masked_lm_ids[i] = item['masked_lm_ids']
+
+        f = h5py.File(path + '_' + partition_info['number'] + ".hdf5", 'w')
+        f.create_dataset("input_ids", data=input_ids, dtype='i4', compression='gzip')
+        f.create_dataset("input_mask", data=input_mask, dtype='i1', compression='gzip')
+        f.create_dataset("segment_ids", data=segment_ids, dtype='i1', compression='gzip')
+        f.create_dataset("next_sentence_labels", data=next_sentence_labels, dtype='i1', compression='gzip')
+        f.create_dataset("filled_lengths", data=filled_lengths, dtype='i4', compression='gzip')
+        if masking:
+            f.create_dataset("masked_lm_positions", data=masked_lm_positions, dtype='i4', compression='gzip')
+            f.create_dataset("masked_lm_ids", data=masked_lm_ids, dtype='i4', compression='gzip')
+        f.flush()
+        f.close()
+
+        return items
+
+    if bin_size is not None:
+        raise NotImplementedError("Binning is not implemented for saving to HDF5")
+    pairs = pairs.map(
+        _create_final_instance,
+        max_seq_length=target_seq_length,
+        max_predictions_per_seq=max_predictions_per_seq,
+        tokenizer=tokenizer
+    )
+    pairs.map_partitions(_save_one_partition).compute()
+
 def _save_txt(
     pairs,
     path,
@@ -536,10 +656,13 @@ def _save_txt(
 def _save(
     pairs,
     path,
+    tokenizer=None,
     output_format='parquet',
     bin_size=None,
-    target_seq_length=128,
+    target_seq_length=512,
+    max_predictions_per_seq=76,
     masking=False,
+
 ):
   if output_format == 'parquet':
     _save_parquet(
@@ -557,7 +680,16 @@ def _save(
         target_seq_length=target_seq_length,
         masking=masking,
     )
-
+  elif output_format == 'hdf5':
+    _save_hdf5(
+        pairs,
+        path,
+        tokenizer,
+        bin_size=bin_size,
+        target_seq_length=target_seq_length,
+        max_predictions_per_seq=max_predictions_per_seq,
+        masking=masking,
+    )
   else:
     raise ValueError('Format {} not supported!'.format(output_format))
 
@@ -599,6 +731,7 @@ def main(args):
       blocksize=args.block_size,
       num_blocks=args.num_blocks,
       duplicate_factor=args.duplicate_factor,
+      same_dataset_pairs=args.same_dataset_pairs,
       sample_ratio=args.sample_ratio,
       seed=args.seed,
       tokenizer=tokenizer,
@@ -610,10 +743,12 @@ def main(args):
   _save(
       pairs,
       args.sink,
+      tokenizer=tokenizer,
       output_format=args.output_format,
       bin_size=args.bin_size,
       target_seq_length=args.target_seq_length,
-      masking=args.masking,
+      max_predictions_per_seq=int(args.target_seq_length * args.masked_lm_ratio),
+      masking=args.masking
   )
   print('Running the dask pipeline took {} s'.format(time.perf_counter() - tic))
 
@@ -684,7 +819,7 @@ runtime with convergence impact.
       '--books': None,
       '--common-crawl': None,
       '--sink': None,
-      '--output-format': 'parquet',
+      '--output-format': 'hdf5',
       '--wikipedia-lang': 'en',
       '--target-seq-length': 128,
       '--short-seq-prob': 0.1,
@@ -746,7 +881,7 @@ runtime with convergence impact.
       '--output-format',
       type=str,
       default=defaults['--output-format'],
-      choices=['parquet', 'txt'],
+      choices=['parquet', 'txt', 'hdf5'],
       help='The format of the output files. parquet should always be used and '
       'will be used by default. txt is for debugging purpose only. Default: '
       '{}'.format(defaults['--output-format']),
@@ -875,12 +1010,21 @@ runtime with convergence impact.
   attach_bool_arg(
       parser,
       'preshuffle_partitions',
-      default=False,
+      default=True,
       help_str='Whether to preshuffle documents before creating instances. Since'
                ' instances are created partition-wise, assignment of random second'
                ' parts is influenced by this setting. If set to true, parts from '
                'different sources (wiki, books) could form a pair.'
   )
+  attach_bool_arg(
+      parser,
+      'same_dataset_pairs',
+      default=False,
+      help_str='Whether to choose document for tokens_b from the same dataset '
+               '(e.g. wiki or books). It affects "Next Sentence Prediction"'
+               'task.'
+  )
+
   parser.add_argument(
       '--masked-lm-ratio',
       type=float,

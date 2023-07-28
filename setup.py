@@ -59,6 +59,7 @@ setup(
         'awscli>=1.22.55',
         'wikiextractor @ git+https://github.com/attardi/wikiextractor.git@v3.0.6',
         'gdown==4.5.3',
+        'h5py==3.9.0'
     ],
     entry_points={
         'console_scripts': [
