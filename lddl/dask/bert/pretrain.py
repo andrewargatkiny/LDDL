@@ -41,8 +41,6 @@ import random
 import time
 import transformers
 from collections import deque, namedtuple
-print(__package__)
-print(sys.path)
 from ..readers import (read_wikipedia, read_books, read_common_crawl,
                        split_id_text, estimate_block_size)
 from lddl.utils import (expand_outdir_and_mkdir, attach_bool_arg,
@@ -360,8 +358,8 @@ def create_pairs_from_document(
               masked_lm_ratio,
               vocab_words,
           )
-          masked_lm_positions = serialize_np_array(
-              np.asarray(masked_lm_positions, dtype=np.uint16))
+          #masked_lm_positions = serialize_np_array(
+          #    np.asarray(masked_lm_positions, dtype=np.uint16))
 
         instance = {
             'A': ' '.join(tokens_a),
@@ -389,12 +387,14 @@ def _create_final_instance(
         max_seq_length: Optional[int],
         max_predictions_per_seq: int
 ) -> Dict:
-    all_tokens = '[CLS]' + instance['A'] + '[SEP]' + instance['B'] + '[SEP]'
+    all_tokens = '[CLS] ' + instance['A'] + ' [SEP] ' + instance['B'] + ' [SEP]'
+    all_tokens = all_tokens.split()
     filled_length = len(all_tokens)
+    assert instance['num_tokens'] == filled_length, "Mismatch occured during splitting previously joined tokens"
     input_ids = tokenizer.convert_tokens_to_ids(all_tokens)
     input_mask = [1] * len(all_tokens)
     # Account for [CLS] and [SEP] tokens in 1st segment, [SEP] token in the 2nd.
-    segment_ids = [0] * len(instance['A'] + 2) + [1] * len(instance['B'] + 1)
+    segment_ids = [0] * (len(instance['A'].split()) + 2) + [1] * (len(instance['B'].split()) + 1) 
     next_sentence_label = 1 if instance['is_random_next'] else 0
 
     if max_seq_length is not None and filled_length < max_seq_length:
@@ -577,26 +577,29 @@ def _save_hdf5(
         """Saves one partition as a HDF5 file."""
 
         n_items = len(items)
+        if partition_info['number'] == -1: 
+            return items
         input_ids = np.zeros([n_items, target_seq_length], dtype="int32")
         input_mask = np.zeros([n_items, target_seq_length], dtype="int8")
         segment_ids = np.zeros([n_items, target_seq_length], dtype="int8")
         next_sentence_labels = np.zeros(n_items, dtype="int8")
         filled_lengths = np.zeros(n_items, dtype="int32")
         if masking:
-            masked_lm_positions = np.zeros([n_items, target_seq_length], dtype="int32")
-            masked_lm_ids = np.zeros([n_items, target_seq_length], dtype="int32")
+            masked_lm_positions = np.zeros([n_items, max_predictions_per_seq], dtype="int32")
+            masked_lm_ids = np.zeros([n_items, max_predictions_per_seq], dtype="int32")
 
-        for i, item in enumerate(items):
-            input_ids[i] = item['input_ids']
-            input_mask[i] = item['input_mask']
-            segment_ids[i] = item['segment_ids']
-            next_sentence_labels[i] = item['next_sentence_labels']
-            filled_lengths[i] = item['filled_lengths']
+        for i, item in enumerate(items.itertuples()):
+            input_ids[i] = item.input_ids
+            input_mask[i] = item.input_mask
+            segment_ids[i] = item.segment_ids
+            next_sentence_labels[i] = item.next_sentence_labels
+            filled_lengths[i] = item.filled_lengths
             if masking:
-                masked_lm_positions[i] = item['masked_lm_positions']
-                masked_lm_ids[i] = item['masked_lm_ids']
+                masked_lm_positions[i] = item.masked_lm_positions
+                masked_lm_ids[i] = item.masked_lm_ids
 
-        f = h5py.File(path + '_' + partition_info['number'] + ".hdf5", 'w')
+        filename = os.path.join(path, 'part_' + str(partition_info['number']) + ".hdf5")
+        f = h5py.File(filename, 'w')
         f.create_dataset("input_ids", data=input_ids, dtype='i4', compression='gzip')
         f.create_dataset("input_mask", data=input_mask, dtype='i1', compression='gzip')
         f.create_dataset("segment_ids", data=segment_ids, dtype='i1', compression='gzip')
@@ -607,6 +610,7 @@ def _save_hdf5(
             f.create_dataset("masked_lm_ids", data=masked_lm_ids, dtype='i4', compression='gzip')
         f.flush()
         f.close()
+        print("Saved hdf5 file:", filename)
 
         return items
 
@@ -617,8 +621,8 @@ def _save_hdf5(
         max_seq_length=target_seq_length,
         max_predictions_per_seq=max_predictions_per_seq,
         tokenizer=tokenizer
-    )
-    pairs.map_partitions(_save_one_partition).compute()
+        )
+    pairs.to_dataframe().map_partitions(_save_one_partition).compute()
 
 def _save_txt(
     pairs,
