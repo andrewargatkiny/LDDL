@@ -27,7 +27,9 @@ import sys
 from typing import Dict, Optional, Iterable
 
 import dask
+import dask.array as da
 import dask.bag as db
+import dask.dataframe as dd
 import dask.distributed
 import functools
 import json
@@ -418,7 +420,7 @@ def _create_final_instance(
         'masked_lm_positions': masked_lm_positions,
         'masked_lm_ids': masked_lm_ids,
         'next_sentence_labels': next_sentence_label,
-        'filled_lengths': filled_length
+        'filled_lengths': filled_length,
     }
     return final_instance
 
@@ -440,6 +442,7 @@ def _get_pairs(
     masking=False,
     preshuffle_partitions=False,
     masked_lm_ratio=0.15,
+    partition_size='100MB'
 ):
   vocab_words = tuple(tokenizer.vocab.keys())
 
@@ -500,7 +503,8 @@ def _get_pairs(
   if preshuffle_partitions:
     bag_texts = _shuffle_bag_texts(bag_texts)
   bag_documents = _get_documents(bag_texts, tokenizer)
-  return bag_documents.map_partitions(_to_partition_pairs)
+  return (bag_documents.map_partitions(_to_partition_pairs)
+          .repartition(partition_size=partition_size))
 
 
 def _save_parquet(
@@ -567,6 +571,7 @@ def _save_hdf5(
     bin_size=None,
     target_seq_length=128,
     max_predictions_per_seq=76,
+    samples_per_file=2**16,
     masking=False,
 
 ):
@@ -576,6 +581,7 @@ def _save_hdf5(
     ) -> None:
         """Saves one partition as a HDF5 file."""
 
+        print("Started preprocessing a partition number", partition_info['number'])
         n_items = len(items)
         if partition_info['number'] == -1: 
             return items
@@ -598,7 +604,9 @@ def _save_hdf5(
                 masked_lm_positions[i] = item.masked_lm_positions
                 masked_lm_ids[i] = item.masked_lm_ids
 
-        filename = os.path.join(path, 'part_' + str(partition_info['number']) + ".hdf5")
+        filename = os.path.join(path, 'part_'
+                                + f"{partition_info['number']:05d}" + ".hdf5")
+        print("Starting saving hdf5 file:", filename)
         f = h5py.File(filename, 'w')
         f.create_dataset("input_ids", data=input_ids, dtype='i4', compression='gzip')
         f.create_dataset("input_mask", data=input_mask, dtype='i1', compression='gzip')
@@ -616,13 +624,38 @@ def _save_hdf5(
 
     if bin_size is not None:
         raise NotImplementedError("Binning is not implemented for saving to HDF5")
+
     pairs = pairs.map(
         _create_final_instance,
         max_seq_length=target_seq_length,
         max_predictions_per_seq=max_predictions_per_seq,
         tokenizer=tokenizer
-        )
-    pairs.to_dataframe().map_partitions(_save_one_partition).compute()
+        ).to_dataframe().persist()
+
+    # This helps to shuffle pairs across partitions to spread in-partition
+    # duplicate samples (the problem arises when args.duplicate-factor > 1)
+    # and to mix data from homogenous dataset partitions which happens when
+    # args.preshuffle is set to False.
+    chunks = (tuple(pairs.map_partitions(len)),)
+    print("total chunks", chunks)
+    # n_pairs = len(pairs)
+    n_pairs = sum(chunks[0])
+    print("total samples in dataset:", n_pairs)
+
+    # Last division should be >= n_pairs for Dask to work
+    divisions = np.arange(0, n_pairs, samples_per_file)
+    if n_pairs % samples_per_file != 0:
+        last_el = [divisions[-1] + samples_per_file]
+    else:
+        last_el = []
+
+    divisions = list(divisions) + last_el
+    
+    pairs = pairs.assign(index=da.random.permutation(n_pairs)
+                  .rechunk(chunks))
+    pairs = pairs.set_index('index', divisions=divisions)
+
+    pairs.map_partitions(_save_one_partition).compute()
 
 def _save_txt(
     pairs,
@@ -665,6 +698,7 @@ def _save(
     bin_size=None,
     target_seq_length=512,
     max_predictions_per_seq=76,
+    samples_per_file=2**16,
     masking=False,
 
 ):
@@ -692,6 +726,7 @@ def _save(
         bin_size=bin_size,
         target_seq_length=target_seq_length,
         max_predictions_per_seq=max_predictions_per_seq,
+        samples_per_file=samples_per_file,
         masking=masking,
     )
   else:
@@ -700,6 +735,7 @@ def _save(
 
 def main(args):
   dask.config.set({"distributed.comm.timeouts.connect": 60})
+  random.seed(args.seed)
 
   if args.bin_size is not None:
     if args.bin_size > args.target_seq_length:
@@ -742,8 +778,10 @@ def main(args):
       masking=args.masking,
       preshuffle_partitions=args.preshuffle_partitions,
       masked_lm_ratio=args.masked_lm_ratio,
+      partition_size=args.partition_size
   )
   args.sink = expand_outdir_and_mkdir(args.sink)
+
   _save(
       pairs,
       args.sink,
@@ -752,6 +790,7 @@ def main(args):
       bin_size=args.bin_size,
       target_seq_length=args.target_seq_length,
       max_predictions_per_seq=int(args.target_seq_length * args.masked_lm_ratio),
+      samples_per_file=args.samples_per_file,
       masking=args.masking
   )
   print('Running the dask pipeline took {} s'.format(time.perf_counter() - tic))
@@ -829,12 +868,14 @@ runtime with convergence impact.
       '--short-seq-prob': 0.1,
       '--block-size': None,
       '--num-blocks': None,
+      '--samples-per-file': 2**16,
       '--bin-size': None,
       '--sample-ratio': 0.9,
       '--seed': 12345,
       '--duplicate-factor': 5,
       '--vocab-file': 'bert-large-uncased',
       '--masked-lm-ratio': 0.15,
+      '--partition-size': "100MB"
   }
   parser.add_argument(
       '--local-n-workers',
@@ -948,6 +989,13 @@ runtime with convergence impact.
           defaults['--num-blocks']),
   )
   parser.add_argument(
+      '--samples-per-file',
+      type=int,
+      default=defaults['--samples-per-file'],
+      help='Number of training samples per one output file. Default: {}'
+      .format(defaults['--samples-per-file']),
+  )
+  parser.add_argument(
       '--bin-size',
       type=int,
       default=defaults['--bin-size'],
@@ -1036,6 +1084,14 @@ runtime with convergence impact.
       help='The ratio of the number of tokens to be masked when static masking '
       'is enabled (i.e., when --masking is set). Default: {}'.format(
           defaults['--masked-lm-ratio']),
+  )
+  parser.add_argument(
+      '--partition-size',
+      type=str,
+      default=defaults['--partition-size'],
+      help='Approximate size of a partition after pairs formation. '
+           'If it is too large, Dask fails at further steps.'
+           'Default: {}'.format(defaults['--partition-size']),
   )
   return parser
 
