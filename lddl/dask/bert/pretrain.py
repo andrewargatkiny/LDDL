@@ -447,6 +447,8 @@ def _get_pairs(
   vocab_words = tuple(tokenizer.vocab.keys())
 
   def _to_partition_pairs(partition_documents):
+
+    print("Started to create pairs for a partition")
     partition_documents = tuple(partition_documents)
     partition_pairs = []
     for _ in range(duplicate_factor):
@@ -463,6 +465,7 @@ def _get_pairs(
                 same_dataset_pairs=same_dataset_pairs
             ))
     random.shuffle(partition_pairs)
+    print("Finished to create pairs for a partition")
     return partition_pairs
 
   if num_blocks is not None:
@@ -620,7 +623,7 @@ def _save_hdf5(
         f.close()
         print("Saved hdf5 file:", filename)
 
-        return items
+        return partition_info['number']
 
     if bin_size is not None:
         raise NotImplementedError("Binning is not implemented for saving to HDF5")
@@ -630,7 +633,8 @@ def _save_hdf5(
         max_seq_length=target_seq_length,
         max_predictions_per_seq=max_predictions_per_seq,
         tokenizer=tokenizer
-        ).to_dataframe().persist()
+        ).to_dataframe()
+    """.persist()
 
     # This helps to shuffle pairs across partitions to spread in-partition
     # duplicate samples (the problem arises when args.duplicate-factor > 1)
@@ -653,7 +657,7 @@ def _save_hdf5(
     
     pairs = pairs.assign(index=da.random.permutation(n_pairs)
                   .rechunk(chunks))
-    pairs = pairs.set_index('index', divisions=divisions)
+    pairs = pairs.set_index('index', divisions=divisions)"""
 
     pairs.map_partitions(_save_one_partition).compute()
 
@@ -872,7 +876,7 @@ runtime with convergence impact.
       '--bin-size': None,
       '--sample-ratio': 0.9,
       '--seed': 12345,
-      '--duplicate-factor': 5,
+      '--duplicate-factor': 1,
       '--vocab-file': 'bert-large-uncased',
       '--masked-lm-ratio': 0.15,
       '--partition-size': "100MB"
@@ -1049,7 +1053,7 @@ runtime with convergence impact.
   attach_bool_arg(
       parser,
       'masking',
-      default=False,
+      default=True,
       help_str='LDDL supports both static and dynamic masking. Static masking '
       'means that the masking operation is applied by the preprocessor, thus, '
       'which and how tokens are masked is fixed during training. Dynamic '
@@ -1062,7 +1066,7 @@ runtime with convergence impact.
   attach_bool_arg(
       parser,
       'preshuffle_partitions',
-      default=True,
+      default=False,
       help_str='Whether to preshuffle documents before creating instances. Since'
                ' instances are created partition-wise, assignment of random second'
                ' parts is influenced by this setting. If set to true, parts from '
@@ -1072,9 +1076,9 @@ runtime with convergence impact.
       parser,
       'same_dataset_pairs',
       default=False,
-      help_str='Whether to choose document for tokens_b from the same dataset '
-               '(e.g. wiki or books). It affects "Next Sentence Prediction"'
-               'task.'
+      help_str='Whether to choose document for tokens_b exclusively from the '
+               'same dataset (e.g. wiki or books). It affects "Next Sentence '
+               'Prediction" task if different sources are mixed together.'
   )
 
   parser.add_argument(
