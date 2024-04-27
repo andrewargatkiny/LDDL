@@ -21,6 +21,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 #
+import json
 
 import dask.bag as db
 import nltk
@@ -74,6 +75,24 @@ def _read_bag_of_text(
   return bag_strs
 
 
+def _read_cc_of_jsons(
+    path,
+    dataset_id,
+    blocksize=None,
+    sample_ratio=1.0,
+    sample_seed=12345,
+):
+  input_files = _find_files_under(path)
+  bag_strs = db.read_text(input_files, blocksize=blocksize).map(json.loads)
+  bag_strs = _filter_empty_strs(bag_strs)
+  if sample_ratio < 1.0:
+    bag_strs = bag_strs.random_sample(sample_ratio, random_state=sample_seed)
+  bag_strs = bag_strs.map(
+      lambda row: " ".join([dataset_id, row["url"], row["text"].replace('\n', ' ')])
+  )
+  return bag_strs
+
+
 def read_wikipedia(
     path,
     lang='en',
@@ -111,7 +130,7 @@ def read_common_crawl(
     sample_ratio=1.0,
     sample_seed=12345,
 ):
-  return _read_bag_of_text(
+  return _read_cc_of_jsons( #_read_bag_of_text(
       path,
       dataset_id='cc',
       blocksize=blocksize,

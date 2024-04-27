@@ -187,7 +187,7 @@ MaskedLmInstance = namedtuple("MaskedLmInstance", ["index", "label"])
 
 
 def create_masked_lm_predictions(tokens_a, tokens_b, masked_lm_ratio,
-                                 vocab_words):
+                                 vocab_words, p_mask_token=0.8):
   """Creates the predictions for the masked LM objective."""
   num_tokens_a, num_tokens_b = len(tokens_a), len(tokens_b)
   tokens = ['[CLS]'] + tokens_a + ['[SEP]'] + tokens_b + ['[SEP]']
@@ -214,14 +214,14 @@ def create_masked_lm_predictions(tokens_a, tokens_b, masked_lm_ratio,
     covered_indexes.add(index)
 
     masked_token = None
-    # 80% of the time, replace with [MASK]
-    if random.random() < 0.8:
+    # p_mask_token % of the time (default 80%), replace with [MASK]
+    if random.random() < p_mask_token:
       masked_token = "[MASK]"
     else:
-      # 10% of the time, keep original
+      # 50% of the rest, keep original
       if random.random() < 0.5:
         masked_token = tokens[index]
-      # 10% of the time, replace with random word
+      # otherwise, replace with random word
       else:
         masked_token = vocab_words[random.randint(0, len(vocab_words) - 1)]
 
@@ -253,7 +253,8 @@ def create_pairs_from_document(
     masking=False,
     masked_lm_ratio=0.15,
     vocab_words=None,
-    same_dataset_pairs=False
+    same_dataset_pairs=False,
+    p_mask_token=0.8
 ):
   """Create a pair for a single document."""
   document = all_documents[document_index]
@@ -359,6 +360,7 @@ def create_pairs_from_document(
               tokens_b,
               masked_lm_ratio,
               vocab_words,
+              p_mask_token
           )
           #masked_lm_positions = serialize_np_array(
           #    np.asarray(masked_lm_positions, dtype=np.uint16))
@@ -442,6 +444,7 @@ def _get_pairs(
     masking=False,
     preshuffle_partitions=False,
     masked_lm_ratio=0.15,
+    p_mask_token=0.8,
     partition_size='100MB'
 ):
   vocab_words = tuple(tokenizer.vocab.keys())
@@ -462,7 +465,8 @@ def _get_pairs(
                 masking=masking,
                 masked_lm_ratio=masked_lm_ratio,
                 vocab_words=vocab_words,
-                same_dataset_pairs=same_dataset_pairs
+                same_dataset_pairs=same_dataset_pairs,
+                p_mask_token=p_mask_token
             ))
     random.shuffle(partition_pairs)
     print("Finished to create pairs for a partition")
@@ -588,38 +592,43 @@ def _save_hdf5(
         n_items = len(items)
         if partition_info['number'] == -1: 
             return items
-        input_ids = np.zeros([n_items, target_seq_length], dtype="int32")
-        input_mask = np.zeros([n_items, target_seq_length], dtype="int8")
-        segment_ids = np.zeros([n_items, target_seq_length], dtype="int8")
-        next_sentence_labels = np.zeros(n_items, dtype="int8")
-        filled_lengths = np.zeros(n_items, dtype="int32")
-        if masking:
-            masked_lm_positions = np.zeros([n_items, max_predictions_per_seq], dtype="int32")
-            masked_lm_ids = np.zeros([n_items, max_predictions_per_seq], dtype="int32")
-
-        for i, item in enumerate(items.itertuples()):
-            input_ids[i] = item.input_ids
-            input_mask[i] = item.input_mask
-            segment_ids[i] = item.segment_ids
-            next_sentence_labels[i] = item.next_sentence_labels
-            filled_lengths[i] = item.filled_lengths
-            if masking:
-                masked_lm_positions[i] = item.masked_lm_positions
-                masked_lm_ids[i] = item.masked_lm_ids
-
         filename = os.path.join(path, 'part_'
                                 + f"{partition_info['number']:05d}" + ".hdf5")
         print("Starting saving hdf5 file:", filename)
         f = h5py.File(filename, 'w')
-        f.create_dataset("input_ids", data=input_ids, dtype='i4', compression='gzip')
-        f.create_dataset("input_mask", data=input_mask, dtype='i1', compression='gzip')
-        f.create_dataset("segment_ids", data=segment_ids, dtype='i1', compression='gzip')
-        f.create_dataset("next_sentence_labels", data=next_sentence_labels, dtype='i1', compression='gzip')
-        f.create_dataset("filled_lengths", data=filled_lengths, dtype='i4', compression='gzip')
-        if masking:
-            f.create_dataset("masked_lm_positions", data=masked_lm_positions, dtype='i4', compression='gzip')
-            f.create_dataset("masked_lm_ids", data=masked_lm_ids, dtype='i4', compression='gzip')
+        f.create_dataset("input_ids",
+                         data=np.array(items["input_ids"].tolist(), dtype="int32"),
+                         dtype='i4', compression='gzip')
         f.flush()
+        f.create_dataset("input_mask",
+                         data=np.array(items["input_mask"].tolist(), dtype="int8"),
+                         dtype='i1', compression='gzip')
+        f.flush()
+        f.create_dataset("segment_ids",
+                         data=np.array(items["segment_ids"].tolist(), dtype="int8"),
+                         dtype='i1', compression='gzip')
+        f.flush()
+        f.create_dataset("next_sentence_labels",
+                         data=np.array(items["next_sentence_labels"].tolist(),  dtype="int8"),
+                         dtype='i1', compression='gzip')
+        f.flush()
+        f.create_dataset("filled_lengths",
+                         data=np.array(items["filled_lengths"].tolist(), dtype="int32"),
+                         dtype='i4', compression='gzip')
+        if masking:
+            try:
+                f.create_dataset("masked_lm_positions",
+                                 data=np.array(items["masked_lm_positions"].tolist(), dtype="int32"),
+                                 dtype='i4', compression='gzip')
+                f.flush()
+            except Exception as ex:
+                lengths = items["masked_lm_positions"].map(lambda arr: len(arr))
+                print("masked_lm_positions lengths", lengths.min(), lengths.max())
+                raise ex
+            f.create_dataset("masked_lm_ids",
+                             data=np.array(items["masked_lm_ids"].tolist(), dtype="int32"),
+                             dtype='i4', compression='gzip')
+            f.flush()
         f.close()
         print("Saved hdf5 file:", filename)
 
@@ -782,6 +791,7 @@ def main(args):
       masking=args.masking,
       preshuffle_partitions=args.preshuffle_partitions,
       masked_lm_ratio=args.masked_lm_ratio,
+      p_mask_token=args.p_mask_token,
       partition_size=args.partition_size
   )
   args.sink = expand_outdir_and_mkdir(args.sink)
@@ -793,7 +803,7 @@ def main(args):
       output_format=args.output_format,
       bin_size=args.bin_size,
       target_seq_length=args.target_seq_length,
-      max_predictions_per_seq=int(args.target_seq_length * args.masked_lm_ratio),
+      max_predictions_per_seq=int(round(args.target_seq_length * args.masked_lm_ratio)),
       samples_per_file=args.samples_per_file,
       masking=args.masking
   )
@@ -879,6 +889,7 @@ runtime with convergence impact.
       '--duplicate-factor': 1,
       '--vocab-file': 'bert-large-uncased',
       '--masked-lm-ratio': 0.15,
+      '--p-mask-token': 0.8,
       '--partition-size': "100MB"
   }
   parser.add_argument(
@@ -1089,6 +1100,15 @@ runtime with convergence impact.
       'is enabled (i.e., when --masking is set). Default: {}'.format(
           defaults['--masked-lm-ratio']),
   )
+  parser.add_argument(
+      '--p-mask-token',
+      type=float,
+      default=defaults['--p-mask-token'],
+      help='The ratio of tokens which are selected to be masked or replaced by'
+           ' itself or random token that will be actually by masked with [MASK]'
+           ' token. Default: {}'.format(defaults['--masked-lm-ratio']),
+  )
+
   parser.add_argument(
       '--partition-size',
       type=str,

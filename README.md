@@ -1,3 +1,6 @@
+
+If you want to prepare datasets for pretraining BERT-like models based on DenseAttention, [read this README](lddl/dask/bert/README.md)
+
 # Language Datasets and Data Loaders
 
 Language Datasets and Data Loaders (LDDL) is a utility library that minimizes
