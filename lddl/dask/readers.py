@@ -83,8 +83,9 @@ def _read_cc_of_jsons(
     sample_seed=12345,
 ):
   input_files = _find_files_under(path)
-  bag_strs = db.read_text(input_files, blocksize=blocksize).map(json.loads)
+  bag_strs = db.read_text(input_files, blocksize=blocksize)
   bag_strs = _filter_empty_strs(bag_strs)
+  bag_strs = bag_strs.map(json.loads)
   if sample_ratio < 1.0:
     bag_strs = bag_strs.random_sample(sample_ratio, random_state=sample_seed)
   bag_strs = bag_strs.map(

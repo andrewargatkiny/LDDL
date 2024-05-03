@@ -481,7 +481,7 @@ def _get_pairs(
     )
 
   bags = []
-  if wikipedia_path is not None:
+  if wikipedia_path:
     bags.append(
         read_wikipedia(
             wikipedia_path,
@@ -490,7 +490,7 @@ def _get_pairs(
             sample_ratio=sample_ratio,
             sample_seed=seed,
         ))
-  if books_path is not None:
+  if books_path:
     bags.append(
         read_books(
             books_path,
@@ -498,7 +498,7 @@ def _get_pairs(
             sample_ratio=sample_ratio,
             sample_seed=seed,
         ))
-  if common_crawl_path is not None:
+  if common_crawl_path:
     bags.append(
         read_common_crawl(
             common_crawl_path,

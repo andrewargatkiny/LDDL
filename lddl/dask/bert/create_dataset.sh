@@ -44,10 +44,11 @@ mkdir -p "$TEST_BASE_DIR/bookcorpus" "$TEST_BASE_DIR/wikipedia/en" "$TEST_BASE_D
 
 function create_base_shards()
 {
-  local dataset_subdir="$1"
-  local nfiles="$2"
+  local input_path="$1"
+  local dataset_subdir="$2"
+  local nfiles="$3"
   ./shuffle_split.sh \
-    --inputdir "$BOOKS_PATH" \
+    --inputdir "$input_path" \
     --outputdir "$TRAIN_BASE_DIR/$dataset_subdir" \
     --nfiles $nfiles
 
@@ -55,22 +56,22 @@ function create_base_shards()
 
   for shard in $(seq $N_TRAIN_SHARDS $(($N_TRAIN_SHARDS + $N_TEST_SHARDS - 1)))
   do
-    mv "$TRAIN_BASE_DIR/$dataset_name/part_${shard}.txt" "$TEST_BASE_DIR/$dataset_name/"
+    mv "$TRAIN_BASE_DIR/$dataset_subdir/part_${shard}.txt" "$TEST_BASE_DIR/$dataset_subdir/"
   done
   echo "Created base test shards for $dataset_subdir"
 }
 
 echo "Started to create base train and test shards"
 if [[ -n  "$BOOKS_PATH" ]]; then
-  create_base_shards "bookcorpus" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
+  create_base_shards "$BOOKS_PATH" "bookcorpus" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
 fi
 
 if [[ -n "$WIKI_PATH" ]]; then
-  create_base_shards "wikipedia" $((2 * $N_TRAIN_SHARDS + 2 * $N_TEST_SHARDS))
+  create_base_shards "$WIKI_PATH" "wikipedia/en" $((2 * $N_TRAIN_SHARDS + 2 * $N_TEST_SHARDS))
 fi
 
 if [[ -n "$C4_PATH" ]]; then
-  create_base_shards "c4" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
+  create_base_shards "$C4_PATH" "c4" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
 fi
 echo "Finished to create base train and test shards"
 
@@ -116,7 +117,7 @@ function create_dataset()
         --output-format=hdf5 \
         --wikipedia="$WIKI" \
         --books="$BOOKS" \
-        --common_crawl_path="$C4" \
+        --common_crawl="$C4" \
         --sink="$RUN_OUTDIR/dataset" \
         --target-seq-length="$MAX_SEQ_LEN" \
         --short-seq-prob="$SHORT_SEQ_PROB" \
@@ -130,14 +131,14 @@ function create_dataset()
 
 # Create dataset for training
 if [[ -n "$N_TRAIN_RUNS" && "$N_TRAIN_RUNS" -gt 0 ]]; then
-  create_dataset TRAIN_BASE_DIR OUTPUT_TRAIN_DIR N_TRAIN_RUNS \
-    SHORT_SEQ_PROB_TRAIN MASKED_LM_RATIO_TRAIN P_MASK_TOKEN_TRAIN
+  create_dataset "$TRAIN_BASE_DIR" "$OUTPUT_TRAIN_DIR" "$N_TRAIN_RUNS" \
+    "$SHORT_SEQ_PROB_TRAIN" "$MASKED_LM_RATIO_TRAIN" "$P_MASK_TOKEN_TRAIN"
 fi
 
 # Create dataset for evaluation/ test
 if [[ -n "$N_TEST_RUNS" && "$N_TEST_RUNS" -gt 0 ]]; then
-  create_dataset TEST_BASE_DIR OUTPUT_TEST_DIR N_TEST_RUNS \
-    SHORT_SEQ_PROB_TEST MASKED_LM_RATIO_TEST P_MASK_TOKEN_TEST
+  create_dataset "$TEST_BASE_DIR" "$OUTPUT_TEST_DIR" "$N_TEST_RUNS" \
+    "$SHORT_SEQ_PROB_TEST" "$MASKED_LM_RATIO_TEST" "$P_MASK_TOKEN_TEST"
 fi
 
 

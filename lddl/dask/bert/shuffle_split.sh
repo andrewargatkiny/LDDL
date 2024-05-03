@@ -61,12 +61,14 @@ done
 
 # Defaults
 : ${NSPLITS:="$((128+8))"}
-: {SEED:=12345}
+: ${SEED:=12345}
 # OUTPUTDIR="$(dirname "$(readlink -f "$0")")/shuffled"
 : ${OUTPUTDIR:="$(dirname "$INPUTDIR")/shuffled"}
 
 mkdir -p "$OUTPUTDIR"
 cat $INPUTDIR/*.txt | shuf --random-source=<(get_fixed_random "$SEED") > tmp_shuffled.txt
+zcat $INPUTDIR/*.json.gz | shuf --random-source=<(get_fixed_random "$SEED") >> tmp_shuffled.txt
+
 
 LINE_SPLITS=$(($(wc -l tmp_shuffled.txt | awk '{print $1}') / $NSPLITS))
 if (( $LINE_SPLITS == 0 )); then
