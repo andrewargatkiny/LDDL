@@ -117,7 +117,7 @@ function create_dataset()
         --output-format=hdf5 \
         --wikipedia="$WIKI" \
         --books="$BOOKS" \
-        --common_crawl="$C4" \
+        --common-crawl="$C4" \
         --sink="$RUN_OUTDIR/dataset" \
         --target-seq-length="$MAX_SEQ_LEN" \
         --short-seq-prob="$SHORT_SEQ_PROB" \

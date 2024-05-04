@@ -263,7 +263,8 @@ file_names = []
 for n in range(n_out_files):
     file_names.append(args.intermediate_hdf5 + f'/part{n:02d}.hdf5')
 
-if __name__ == '__main__':
+
+def main():
     random_distribute_hdf5()
     with mp.get_context("spawn").Pool(
             min(mp.cpu_count(), n_out_files)

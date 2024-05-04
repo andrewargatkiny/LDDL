@@ -71,6 +71,7 @@ setup(
             'preprocess_bart_pretrain=lddl.dask.bart.pretrain:console_script',
             'balance_dask_output=lddl.dask.load_balance:console_script',
             'generate_num_samples_cache=lddl.dask.load_balance:generate_num_samples_cache',
+            'shuffle_gather_output=lddl.dask.bert.shuffle_gather_output:main'
         ],
     },
 )

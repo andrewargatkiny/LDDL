@@ -76,6 +76,8 @@ The shuffle_gather_output.py script shuffles and gathers the outputs from the cr
 
 ### Example Usage
 
+The script should be executed by a command `shuffle_gather_output`.
+
 ```bash
-python shuffle_gather_output.py --input_hdf5 /path/to/input --output_hdf5 /path/to/output
+shuffle_gather_output --input_hdf5 /path/to/input --output_hdf5 /path/to/output
 ```
