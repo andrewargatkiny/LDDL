@@ -21,19 +21,20 @@ N_TEST_RUNS="${N_TEST_RUNS:-1}"
 
 # Useful if there's a need to create different datasets from same root data
 # (e.g. when data is limited).
-INITIAL_SEED=0
+INITIAL_SEED="${INITIAL_SEED:-0}"
+N_WORKERS="${N_WORKERS:-"$(nproc)"}"
 
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-128}"
 
 # At test time we always use untrimmed sequences of MAX_SEQ_LEN and always replace
 # tested tokens with "[MASK]" as opposed to 20% probability of replacing by random
 # or the same word in train data. Thus, 0.15 * 0.8 = 0.12 as MASKED_LM_RATIO_TEST.
-SHORT_SEQ_PROB_TRAIN="0.1"
-SHORT_SEQ_PROB_TEST="0.0"
-MASKED_LM_RATIO_TRAIN="0.15"
-MASKED_LM_RATIO_TEST="0.12"
-P_MASK_TOKEN_TRAIN="0.8"
-P_MASK_TOKEN_TEST="1.0"
+SHORT_SEQ_PROB_TRAIN="${SHORT_SEQ_PROB_TRAIN:-"0.1"}"
+SHORT_SEQ_PROB_TEST="${SHORT_SEQ_PROB_TEST:-"0.0"}"
+MASKED_LM_RATIO_TRAIN="${MASKED_LM_RATIO_TRAIN:-"0.15"}"
+MASKED_LM_RATIO_TEST="${MASKED_LM_RATIO_TEST:-"0.12"}"
+P_MASK_TOKEN_TRAIN="${P_MASK_TOKEN_TRAIN:-"0.8"}"
+P_MASK_TOKEN_TEST="${P_MASK_TOKEN_TRAIN:-"1.0"}"
 
 
 TRAIN_BASE_DIR="${TRAIN_BASE_DIR:-$(pwd)/raw_train}"
@@ -47,7 +48,7 @@ function create_base_shards()
   local input_path="$1"
   local dataset_subdir="$2"
   local nfiles="$3"
-  ./shuffle_split.sh \
+  shuffle_split.sh \
     --inputdir "$input_path" \
     --outputdir "$TRAIN_BASE_DIR/$dataset_subdir" \
     --nfiles $nfiles
@@ -91,25 +92,25 @@ function create_dataset()
     mkdir -p $RUN_OUTDIR
     # Pre-shuffle each of input datasets so different documents end up
     # in one shard during distinct runs.
-
+    RUN_SEED=$((i + INITIAL_SEED))
     if [[ -n "$BOOKS_PATH" ]]; then
       BOOKS="$RUN_OUTDIR/bookcorpus"
-      ./shuffle_split.sh --inputdir "$BASE_IN_DIR/bookcorpus"  --outputdir "$BOOKS" \
-      --nfiles $N_TRAIN_SHARDS --seed $((i + INITIAL_SEED))
+      shuffle_split.sh --inputdir "$BASE_IN_DIR/bookcorpus"  --outputdir "$BOOKS" \
+      --nfiles $N_TRAIN_SHARDS --seed "$RUN_SEED"
     fi
     if [[ -n "$WIKI_PATH" ]]; then
       WIKI="$RUN_OUTDIR/wikipedia"
-      ./shuffle_split.sh --inputdir "$BASE_IN_DIR/wikipedia/en"  --outputdir "$WIKI/en" \
-      --nfiles $N_TRAIN_SHARDS --seed $((i + INITIAL_SEED))
+      shuffle_split.sh --inputdir "$BASE_IN_DIR/wikipedia/en"  --outputdir "$WIKI/en" \
+      --nfiles $N_TRAIN_SHARDS --seed "$RUN_SEED"
     fi
     if [[ -n "$C4_PATH" ]]; then
       C4="$RUN_OUTDIR/c4"
-      ./shuffle_split.sh --inputdir "$BASE_IN_DIR/c4"  --outputdir "$C4" \
-      --nfiles $N_TRAIN_SHARDS --seed $((i + INITIAL_SEED))
+      shuffle_split.sh --inputdir "$BASE_IN_DIR/c4"  --outputdir "$C4" \
+      --nfiles $N_TRAIN_SHARDS --seed "$RUN_SEED"
     fi
     # Combine datasets and make training/ test sequences out of them
     mpirun \
-    -np $(nproc) \
+    -np $N_WORKERS \
     --oversubscribe \
     --allow-run-as-root \
     -x LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so \
@@ -122,7 +123,8 @@ function create_dataset()
         --target-seq-length="$MAX_SEQ_LEN" \
         --short-seq-prob="$SHORT_SEQ_PROB" \
         --masked-lm-ratio="$MASKED_LM_RATIO" \
-        --p-mask-token="$P_MASK_TOKEN"
+        --p-mask-token="$P_MASK_TOKEN" \
+        --seed="$RUN_SEED"
     rm -rf "$RUN_OUTDIR/bookcorpus" "$RUN_OUTDIR/wikipedia/" "$RUN_OUTDIR/c4"
 
     echo "Finished run $i"
