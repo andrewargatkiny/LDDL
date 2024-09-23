@@ -49,7 +49,7 @@ from lddl.utils import (expand_outdir_and_mkdir, attach_bool_arg,
                         serialize_np_array, deserialize_np_array)
 from lddl.download.utils import parse_str_of_num_bytes
 
-from .binning import to_textfiles_binned, to_dataframe_binned, to_parquet_binned
+from .binning import to_parquet_binned
 
 
 class Sentence:
@@ -550,6 +550,8 @@ def _save_parquet(
         schema=base_schema,
     )
   else:
+    from .binning import to_dataframe_binned
+    from .binning import to_parquet_binned
     nbins = target_seq_length // bin_size
     pairs.to_dataframe = to_dataframe_binned
     dfs = pairs.to_dataframe(
@@ -699,6 +701,7 @@ def _save_txt(
   if bin_size is None:
     db.core.to_textfiles(pairs, os.path.join(path, '*.txt'))
   else:
+    from .binning import to_textfiles_binned
     nbins = target_seq_length // bin_size
     to_textfiles_binned(pairs, os.path.join(path, '*.txt'), bin_size, nbins)
 
