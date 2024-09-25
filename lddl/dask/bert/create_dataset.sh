@@ -109,11 +109,11 @@ function create_dataset()
       --nfiles $N_TRAIN_SHARDS --seed "$RUN_SEED"
     fi
     # Combine datasets and make training/ test sequences out of them
+    # -x LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so \
     mpirun \
     -np $N_WORKERS \
     --oversubscribe \
     --allow-run-as-root \
-    -x LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so \
       preprocess_bert_pretrain \
         --output-format=hdf5 \
         --wikipedia="$WIKI" \

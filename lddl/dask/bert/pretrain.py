@@ -49,8 +49,6 @@ from lddl.utils import (expand_outdir_and_mkdir, attach_bool_arg,
                         serialize_np_array, deserialize_np_array)
 from lddl.download.utils import parse_str_of_num_bytes
 
-from .binning import to_parquet_binned
-
 
 class Sentence:
 
@@ -587,13 +585,13 @@ def _save_hdf5(
     def _save_one_partition(
             items,
             partition_info=None
-    ) -> None:
+    ) -> int:
         """Saves one partition as a HDF5 file."""
 
-        print("Started preprocessing a partition number", partition_info['number'])
+        print("Started preprocessing a partition number", partition_info)
         n_items = len(items)
-        if partition_info['number'] == -1: 
-            return items
+        if partition_info is None or partition_info['number'] == -1:
+            return -1
         filename = os.path.join(path, 'part_'
                                 + f"{partition_info['number']:05d}" + ".hdf5")
         print("Starting saving hdf5 file:", filename)
@@ -670,7 +668,16 @@ def _save_hdf5(
                   .rechunk(chunks))
     pairs = pairs.set_index('index', divisions=divisions)"""
 
-    pairs.map_partitions(_save_one_partition).compute()
+    base_meta = {
+        'input_ids': object,
+        'input_mask': object,
+        'segment_ids': object,
+        'masked_lm_positions': object,
+        'masked_lm_ids': object,
+        'next_sentence_labels': int,
+        'filled_lengths': int,
+    }
+    pairs.map_partitions(_save_one_partition, meta=base_meta).compute()
 
 def _save_txt(
     pairs,
@@ -750,6 +757,8 @@ def _save(
 
 
 def main(args):
+  # https://github.com/dask/dask/issues/10628
+  dask.config.set({"dataframe.convert-string": False})
   dask.config.set({"distributed.comm.timeouts.connect": 60})
   random.seed(args.seed)
 
