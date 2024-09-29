@@ -5,6 +5,9 @@ BOOKS_PATH="${BOOKS_PATH-/workspace/bert/data/bookcorpus/source/}"
 WIKI_PATH="${WIKI_PATH-/workspace/bert/data/wikipedia_dataset/source/en}"
 C4_PATH="${C4_PATH-/workspace/bert/data/c4/source/}"
 
+# Whether to create raw train and test datasets. Set to false if they already exist.
+CREATE_BASE_SHARDS="${CREATE_BASE_SHARDS:-true}"
+
 # Proportions of how to split data between train and test
 N_TRAIN_SHARDS="${N_TRAIN_SHARDS:-256}"
 N_TEST_SHARDS="${N_TEST_SHARDS:-16}"
@@ -62,19 +65,21 @@ function create_base_shards()
   echo "Created base test shards for $dataset_subdir"
 }
 
-echo "Started to create base train and test shards"
-if [[ -n  "$BOOKS_PATH" ]]; then
-  create_base_shards "$BOOKS_PATH" "bookcorpus" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
-fi
+if [[ "$CREATE_BASE_SHARDS" == "true" ]]; then
+  echo "Started to create base train and test shards"
+  if [[ -n  "$BOOKS_PATH" ]]; then
+    create_base_shards "$BOOKS_PATH" "bookcorpus" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
+  fi
 
-if [[ -n "$WIKI_PATH" ]]; then
-  create_base_shards "$WIKI_PATH" "wikipedia/en" $((2 * $N_TRAIN_SHARDS + 2 * $N_TEST_SHARDS))
-fi
+  if [[ -n "$WIKI_PATH" ]]; then
+    create_base_shards "$WIKI_PATH" "wikipedia/en" $((2 * $N_TRAIN_SHARDS + 2 * $N_TEST_SHARDS))
+  fi
 
-if [[ -n "$C4_PATH" ]]; then
-  create_base_shards "$C4_PATH" "c4" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
+  if [[ -n "$C4_PATH" ]]; then
+    create_base_shards "$C4_PATH" "c4" $(($N_TRAIN_SHARDS + $N_TEST_SHARDS))
+  fi
+  echo "Finished to create base train and test shards"
 fi
-echo "Finished to create base train and test shards"
 
 function create_dataset()
 {
