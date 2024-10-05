@@ -25,7 +25,10 @@ N_TEST_RUNS="${N_TEST_RUNS:-1}"
 # Useful if there's a need to create different datasets from same root data
 # (e.g. when data is limited).
 INITIAL_SEED="${INITIAL_SEED:-0}"
+
 N_WORKERS="${N_WORKERS:-"$(nproc)"}"
+# How much information is held by one Dask worker process
+PARTITION_SIZE=${PARTITION_SIZE:-"100MB"}
 
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-128}"
 
@@ -129,6 +132,7 @@ function create_dataset()
         --short-seq-prob="$SHORT_SEQ_PROB" \
         --masked-lm-ratio="$MASKED_LM_RATIO" \
         --p-mask-token="$P_MASK_TOKEN" \
+        --partition-size="$PARTITION_SIZE" \
         --seed="$RUN_SEED"
     rm -rf "$RUN_OUTDIR/bookcorpus" "$RUN_OUTDIR/wikipedia/" "$RUN_OUTDIR/c4"
 
